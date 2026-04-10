@@ -356,8 +356,8 @@ body{background:var(--surface2);font-family:var(--body);color:var(--text);min-he
 <!-- SAVE BAR -->
 <div class="save-bar">
   <div class="save-status"><div class="save-dot" id="save-dot"></div><span id="save-status-text">No saved data yet</span></div>
-  <button class="btn-save-now" onclick="saveNow()">💾 Save Now</button>
-  <button class="btn-clear-save" onclick="clearSave()">Clear Saved</button>
+  <button class="btn-save-now" id="btn-github-save" onclick="saveToGitHub()">☁ Save to GitHub</button>
+  <button class="btn-clear-save" onclick="clearSave()">Clear Local</button>
 </div>
 
 <div class="edit-hint"><span>Click any text</span> to edit · <span>⠿ Drag</span> to reorder · <span>+ Schedule</span> adds a post + auto prep day</div>
@@ -686,22 +686,119 @@ function collectState(){
     phaseTexts
   };
 }
-function saveNow(){
+// ═══════════════════════════════════
+// GITHUB CLOUD SAVE
+// ═══════════════════════════════════
+const GH_TOKEN  = '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';
+const GH_OWNER  = 'samfaith802-a11y';
+const GH_REPO   = 'freebreed-deck';
+const GH_FILE   = 'index.html';
+const GH_API    = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`;
+
+async function saveToGitHub(){
+  const btn = document.getElementById('btn-github-save');
   setSaveStatus('saving');
-  const state=collectState();
-  try{
-    localStorage.setItem(SAVE_KEY,JSON.stringify(state));
-    lastSaveTime=new Date();
-    isDirty=false;
+  btn.textContent = '⏳ Saving…';
+  btn.disabled = true;
+
+  // 1. Collect current state and bake it into the HTML as the new defaults
+  const state = collectState();
+  // Also save to localStorage as a backup
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch(e){}
+
+  // 2. Build the self-contained HTML with state baked into INITIAL_STATE
+  const currentHTML = document.documentElement.outerHTML;
+  const stateJSON   = JSON.stringify(state);
+  // Replace the existing INITIAL_STATE placeholder/value
+  let newHTML = currentHTML.replace(
+    /const INITIAL_STATE\s*=\s*null;/,
+    `const INITIAL_STATE = ${stateJSON};`
+  );
+  // If already has a state, update it
+  if (newHTML === currentHTML) {
+    newHTML = currentHTML.replace(
+      /const INITIAL_STATE\s*=\s*\{[\s\S]*?\};(?=\s*\/\/)/,
+      `const INITIAL_STATE = ${stateJSON};`
+    );
+  }
+  // Fallback: inject before the loadSaved call
+  if (newHTML === currentHTML) {
+    newHTML = currentHTML.replace(
+      'const loaded=loadSaved();',
+      `const INITIAL_STATE=${stateJSON};\nconst loaded=loadSaved();`
+    );
+  }
+
+  const encoded = btoa(unescape(encodeURIComponent(newHTML)));
+
+  try {
+    // 3. Get current file SHA (needed by GitHub API to update)
+    const headRes = await fetch(GH_API, {
+      headers: { 'Authorization': `token ${GH_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!headRes.ok) throw new Error(`GitHub fetch error: ${headRes.status}`);
+    const headData = await headRes.json();
+    const sha = headData.sha;
+
+    // 4. Push the updated file
+    const pushRes = await fetch(GH_API, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `token ${GH_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: `Save deck — ${new Date().toLocaleString()}`,
+        content: encoded,
+        sha: sha
+      })
+    });
+
+    if (!pushRes.ok) {
+      const err = await pushRes.json();
+      throw new Error(err.message || pushRes.status);
+    }
+
+    lastSaveTime = new Date();
+    isDirty = false;
     setSaveStatus('saved');
-    toast('✓ Saved!');
-  }catch(e){toast('⚠ Save failed (localStorage unavailable)');}
+    btn.textContent = '✓ Saved to GitHub!';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.color = 'var(--green)';
+    setTimeout(() => {
+      btn.textContent = '☁ Save to GitHub';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 3000);
+    toast('✓ Saved to GitHub! Link is live.');
+  } catch(err) {
+    console.error(err);
+    btn.textContent = '☁ Save to GitHub';
+    btn.disabled = false;
+    setSaveStatus('unsaved');
+    toast('⚠ GitHub save failed: ' + err.message);
+  }
 }
+
+function saveNow(){
+  // Keep as local backup, also triggers GitHub save
+  saveToGitHub();
+}
+const INITIAL_STATE = null;
+
 function loadSaved(){
   try{
-    const raw=localStorage.getItem(SAVE_KEY);
-    if(!raw)return false;
-    const state=JSON.parse(raw);
+    // Prefer baked-in state (from GitHub save), then localStorage
+    let state = null;
+    if(INITIAL_STATE && typeof INITIAL_STATE === 'object'){
+      state = INITIAL_STATE;
+    } else {
+      const raw=localStorage.getItem(SAVE_KEY);
+      if(!raw)return false;
+      state=JSON.parse(raw);
+    }
     if(state.posts)posts=state.posts;
     if(state.geoTree)geoTree=state.geoTree;
     if(state.scheduled)scheduled=state.scheduled;
@@ -738,8 +835,15 @@ function setSaveStatus(status){
 }
 function formatTime(d){if(!d)return '';const now=new Date();const diff=Math.floor((now-d)/1000);if(diff<10)return 'just now';if(diff<60)return diff+'s ago';if(diff<3600)return Math.floor(diff/60)+'m ago';return d.toLocaleTimeString();}
 function markDirty(){isDirty=true;setSaveStatus('unsaved');}
+function localBackup(){
+  try{
+    const state=collectState();
+    localStorage.setItem(SAVE_KEY,JSON.stringify(state));
+  }catch(e){}
+}
 function initAutosave(){
-  autoSaveInterval=setInterval(()=>{if(isDirty)saveNow();},120000);
+  // Local backup every 2 min silently
+  autoSaveInterval=setInterval(()=>{if(isDirty)localBackup();},120000);
   // update save time display every 30s
   setInterval(()=>{if(lastSaveTime&&!isDirty)setSaveStatus('saved');},30000);
   // mark dirty on any contenteditable change
