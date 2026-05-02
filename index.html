@@ -686,14 +686,6 @@ function collectState(){
     phaseTexts
   };
 }
-// ═══════════════════════════════════
-// GITHUB CLOUD SAVE
-// ═══════════════════════════════════
-const GH_TOKEN  = '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';
-const GH_OWNER  = 'samfaith802-a11y';
-const GH_REPO   = 'freebreed-deck';
-const GH_FILE   = 'index.html';
-const GH_API    = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`;
 
 async function saveToGitHub(){
   const btn = document.getElementById('btn-github-save');
@@ -784,7 +776,7 @@ async function saveToGitHub(){
 
 function saveNow(){
   // Keep as local backup, also triggers GitHub save
-  saveToGitHub();
+  localBackup();
 }
 const INITIAL_STATE = null;
 
